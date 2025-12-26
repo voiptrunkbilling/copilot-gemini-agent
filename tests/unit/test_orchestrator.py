@@ -1,15 +1,59 @@
 """
-Unit tests for M4: Orchestrator.
+Unit tests for M4/M6: Orchestrator.
+
+Updated for M6 with M5 integration (checkpointing, metrics, resilience).
 """
 
 import pytest
+import asyncio
 from unittest.mock import Mock, AsyncMock, patch
 
-from copilot_agent.orchestrator import Orchestrator, IterationResult
+from copilot_agent.orchestrator import Orchestrator, IterationResult, OrchestratorBudget
 from copilot_agent.config import AgentConfig
 from copilot_agent.state import StateManager, SessionPhase, GeminiVerdict
 from copilot_agent.safety.killswitch import KillSwitch
 from copilot_agent.reviewer.gemini import ReviewVerdict, ReviewResult
+from copilot_agent.perception.pipeline import CaptureMethod
+
+
+def run_async(coro):
+    """Helper to run async tests without pytest-asyncio."""
+    return asyncio.get_event_loop().run_until_complete(coro)
+
+
+class TestOrchestratorBudget:
+    """Tests for OrchestratorBudget."""
+    
+    def test_default_budget(self):
+        """Test default budget values."""
+        budget = OrchestratorBudget()
+        
+        assert budget.max_reviewer_calls == 50
+        assert budget.max_vision_calls == 100
+        assert budget.max_ui_actions == 200
+        assert budget.reviewer_calls == 0
+    
+    def test_check_and_use(self):
+        """Test budget check and use."""
+        budget = OrchestratorBudget(max_reviewer_calls=3)
+        
+        assert budget.check_reviewer() is True
+        budget.use_reviewer()
+        assert budget.reviewer_calls == 1
+        
+        budget.use_reviewer()
+        budget.use_reviewer()
+        assert budget.check_reviewer() is False
+    
+    def test_get_usage_report(self):
+        """Test usage report generation."""
+        budget = OrchestratorBudget()
+        budget.use_reviewer()
+        budget.use_vision()
+        
+        report = budget.get_usage_report()
+        assert "1/50" in report["reviewer"]
+        assert "1/100" in report["vision"]
 
 
 class TestIterationResult:
@@ -290,34 +334,37 @@ class TestOrchestratorRun:
             dry_run=True,
         )
     
-    @pytest.mark.asyncio
-    async def test_run_no_session(self, orchestrator):
+    def test_run_no_session(self, orchestrator):
         """Test run fails without session."""
-        with pytest.raises(RuntimeError, match="No active session"):
-            await orchestrator.run()
+        async def _test():
+            with pytest.raises(RuntimeError, match="No active session"):
+                await orchestrator.run()
+        run_async(_test())
     
-    @pytest.mark.asyncio
-    async def test_run_kill_switch(self, orchestrator):
+    def test_run_kill_switch(self, orchestrator):
         """Test run stops on kill switch."""
-        orchestrator.state_manager.create_session("Test task")
-        orchestrator.kill_switch.trigger()
-        
-        await orchestrator.run()
-        
-        # Should have stopped immediately
-        session = orchestrator.state_manager.session
-        assert session.phase in [SessionPhase.COMPLETE, SessionPhase.PROMPTING]
+        async def _test():
+            orchestrator.state_manager.create_session("Test task")
+            orchestrator.kill_switch.trigger()
+            
+            await orchestrator.run()
+            
+            # Should have stopped immediately
+            session = orchestrator.state_manager.session
+            assert session.phase in [SessionPhase.COMPLETE, SessionPhase.PROMPTING, SessionPhase.PAUSED]
+        run_async(_test())
     
-    @pytest.mark.asyncio
-    async def test_run_max_iterations(self, orchestrator):
+    def test_run_max_iterations(self, orchestrator):
         """Test run stops at max iterations."""
-        orchestrator.state_manager.create_session("Test task")
-        orchestrator.config.reviewer.max_iterations = 0  # Immediate stop
-        
-        await orchestrator.run()
-        
-        session = orchestrator.state_manager.session
-        assert session.completion_reason == "max_iterations"
+        async def _test():
+            orchestrator.state_manager.create_session("Test task")
+            orchestrator.config.reviewer.max_iterations = 0  # Immediate stop
+            
+            await orchestrator.run()
+            
+            session = orchestrator.state_manager.session
+            assert session.completion_reason == "max_iterations"
+        run_async(_test())
 
 
 class TestOrchestratorIteration:
@@ -339,98 +386,160 @@ class TestOrchestratorIteration:
             dry_run=True,
         )
     
-    @pytest.mark.asyncio
-    async def test_iteration_no_session(self, orchestrator):
+    def test_iteration_no_session(self, orchestrator):
         """Test iteration fails without session."""
-        result = await orchestrator._run_iteration()
-        
-        assert result.success is False
-        assert result.stop_reason == "no_session"
+        async def _test():
+            result = await orchestrator._run_iteration()
+            
+            assert result.success is False
+            assert result.stop_reason == "no_session"
+        run_async(_test())
     
-    @pytest.mark.asyncio
-    async def test_iteration_with_accept(self, orchestrator):
+    def test_iteration_with_accept(self, orchestrator):
         """Test iteration with ACCEPT verdict."""
-        orchestrator.state_manager.create_session("Test task")
-        
-        # Mock perception
-        mock_capture = Mock()
-        mock_capture.success = True
-        mock_capture.text = "print('hello')"
-        mock_capture.method = Mock()
-        mock_capture.method.value = "ocr"
-        mock_capture.confidence = 0.9
-        
-        mock_perception = Mock()
-        mock_perception.capture_copilot_response = Mock(return_value=mock_capture)
-        orchestrator._perception = mock_perception
-        
-        # Mock reviewer
-        mock_review = ReviewResult(
-            verdict=ReviewVerdict.ACCEPT,
-            confidence="high",
-            reasoning="Looks good",
-            issues=[],
-            follow_up_prompt=None,
-        )
-        orchestrator.reviewer.review = AsyncMock(return_value=mock_review)
-        
-        result = await orchestrator._run_iteration()
-        
-        assert result.success is True
-        assert result.verdict == ReviewVerdict.ACCEPT
-        assert result.should_continue is False
-        assert result.stop_reason == "accepted"
+        async def _test():
+            orchestrator.state_manager.create_session("Test task")
+            
+            # Mock perception capture (need to mock the internal capture method)
+            mock_capture = Mock()
+            mock_capture.success = True
+            mock_capture.text = "print('hello')"
+            mock_capture.method = CaptureMethod.OCR
+            mock_capture.confidence = 0.9
+            
+            # Patch the internal capture to bypass retry wrapper
+            async def mock_capture_with_retry():
+                return mock_capture
+            orchestrator._capture_with_retry = mock_capture_with_retry
+            
+            # Mock reviewer
+            mock_review = ReviewResult(
+                verdict=ReviewVerdict.ACCEPT,
+                confidence="high",
+                reasoning="Looks good",
+                issues=[],
+                follow_up_prompt=None,
+            )
+            
+            async def mock_review_with_retry(**kwargs):
+                return mock_review
+            orchestrator._review_with_retry = mock_review_with_retry
+            
+            result = await orchestrator._run_iteration()
+            
+            assert result.success is True
+            assert result.verdict == ReviewVerdict.ACCEPT
+            assert result.should_continue is False
+            assert result.stop_reason == "accepted"
+        run_async(_test())
     
-    @pytest.mark.asyncio
-    async def test_iteration_with_critique(self, orchestrator):
+    def test_iteration_with_critique(self, orchestrator):
         """Test iteration with CRITIQUE verdict."""
-        orchestrator.state_manager.create_session("Test task")
-        orchestrator.config.reviewer.pause_before_send = False  # Skip pause
-        
-        # Mock perception
-        mock_capture = Mock()
-        mock_capture.success = True
-        mock_capture.text = "def foo(): pass"
-        mock_capture.method = Mock()
-        mock_capture.method.value = "ocr"
-        mock_capture.confidence = 0.85
-        
-        mock_perception = Mock()
-        mock_perception.capture_copilot_response = Mock(return_value=mock_capture)
-        orchestrator._perception = mock_perception
-        
-        # Mock reviewer
-        mock_review = ReviewResult(
-            verdict=ReviewVerdict.CRITIQUE,
-            confidence="medium",
-            reasoning="Missing docstring",
-            issues=["No docstring"],
-            follow_up_prompt="Add a docstring",
-        )
-        orchestrator.reviewer.review = AsyncMock(return_value=mock_review)
-        
-        result = await orchestrator._run_iteration()
-        
-        assert result.success is True
-        assert result.verdict == ReviewVerdict.CRITIQUE
-        assert result.should_continue is True
-        assert result.feedback == "Add a docstring"
+        async def _test():
+            orchestrator.state_manager.create_session("Test task")
+            orchestrator.config.reviewer.pause_before_send = False  # Skip pause
+            
+            # Mock perception capture
+            mock_capture = Mock()
+            mock_capture.success = True
+            mock_capture.text = "def foo(): pass"
+            mock_capture.method = CaptureMethod.OCR
+            mock_capture.confidence = 0.85
+            
+            async def mock_capture_with_retry():
+                return mock_capture
+            orchestrator._capture_with_retry = mock_capture_with_retry
+            
+            # Mock reviewer
+            mock_review = ReviewResult(
+                verdict=ReviewVerdict.CRITIQUE,
+                confidence="medium",
+                reasoning="Missing docstring",
+                issues=["No docstring"],
+                follow_up_prompt="Add a docstring",
+            )
+            
+            async def mock_review_with_retry(**kwargs):
+                return mock_review
+            orchestrator._review_with_retry = mock_review_with_retry
+            
+            result = await orchestrator._run_iteration()
+            
+            assert result.success is True
+            assert result.verdict == ReviewVerdict.CRITIQUE
+            assert result.should_continue is True
+            assert result.feedback == "Add a docstring"
+        run_async(_test())
     
-    @pytest.mark.asyncio
-    async def test_iteration_capture_failure(self, orchestrator):
+    def test_iteration_capture_failure(self, orchestrator):
         """Test iteration with capture failure."""
-        orchestrator.state_manager.create_session("Test task")
+        async def _test():
+            orchestrator.state_manager.create_session("Test task")
+            
+            # Mock failed capture
+            mock_capture = Mock()
+            mock_capture.success = False
+            mock_capture.error = "Screenshot failed"
+            mock_capture.method = CaptureMethod.OCR
+            
+            async def mock_capture_with_retry():
+                return mock_capture
+            orchestrator._capture_with_retry = mock_capture_with_retry
+            
+            result = await orchestrator._run_iteration()
+            
+            assert result.success is False
+            assert result.should_continue is True  # Will retry
+        run_async(_test())
+
+
+class TestOrchestratorM6Features:
+    """Tests for M6 production features."""
+    
+    @pytest.fixture
+    def orchestrator(self):
+        config = AgentConfig()
+        state_manager = StateManager(config)
+        kill_switch = KillSwitch()
         
-        # Mock failed capture
-        mock_capture = Mock()
-        mock_capture.success = False
-        mock_capture.error = "Screenshot failed"
+        return Orchestrator(
+            config=config,
+            state_manager=state_manager,
+            kill_switch=kill_switch,
+            dry_run=True,
+        )
+    
+    def test_get_circuit_status(self, orchestrator):
+        """Test circuit breaker status."""
+        status = orchestrator.get_circuit_status()
         
-        mock_perception = Mock()
-        mock_perception.capture_copilot_response = Mock(return_value=mock_capture)
-        orchestrator._perception = mock_perception
-        
-        result = await orchestrator._run_iteration()
-        
-        assert result.success is False
-        assert result.should_continue is True  # Will retry
+        assert "reviewer" in status
+        assert "vision" in status
+        assert "ui" in status
+        assert status["reviewer"] == "closed"
+    
+    def test_metrics_accessor(self, orchestrator):
+        """Test metrics accessor."""
+        metrics = orchestrator.metrics
+        assert metrics is not None
+    
+    def test_budget_accessor(self, orchestrator):
+        """Test budget accessor."""
+        budget = orchestrator.budget
+        assert budget is not None
+        assert budget.max_reviewer_calls > 0
+    
+    def test_get_stats(self, orchestrator):
+        """Test stats display."""
+        stats = orchestrator.get_stats()
+        assert isinstance(stats, str)
+        assert "Session" in stats
+    
+    def test_checkpointer_accessor(self, orchestrator):
+        """Test checkpointer accessor returns None when not configured."""
+        assert orchestrator.checkpointer is None
+    
+    def test_get_resume_info_no_checkpointer(self, orchestrator):
+        """Test resume info when no checkpointer."""
+        info = orchestrator.get_resume_info()
+        assert info is None
