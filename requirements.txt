@@ -29,5 +29,8 @@ PyYAML>=6.0.1
 rich>=13.7.0
 click>=8.1.7
 
+# File locking (M5 checkpointing)
+filelock>=3.12.0
+
 # Logging
 structlog>=23.2.0
