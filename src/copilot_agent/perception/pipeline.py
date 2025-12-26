@@ -160,7 +160,14 @@ class PerceptionPipeline:
         
         try:
             # Stage 1: Screenshot
-            screenshot_result = self.screenshot.capture(region=region)
+            if region:
+                screenshot_result = self.screenshot.capture_region(region)
+            else:
+                # Save to output dir if configured
+                save_path = None
+                if self.save_captures and self.output_dir:
+                    save_path = self.output_dir / f"{capture_id}_screenshot.png"
+                screenshot_result = self.screenshot.capture_full_screen(save_path=save_path)
             
             if not screenshot_result.success:
                 return CaptureResult(
@@ -171,8 +178,8 @@ class PerceptionPipeline:
             
             screenshot_path = screenshot_result.path
             
-            # Save screenshot if configured
-            if self.save_captures and self.output_dir:
+            # For region captures, save to output dir if needed
+            if region and self.save_captures and self.output_dir:
                 saved_path = self.output_dir / f"{capture_id}_screenshot.png"
                 if screenshot_path != saved_path:
                     import shutil
@@ -181,7 +188,11 @@ class PerceptionPipeline:
             
             # Stage 2: Preprocessing
             if use_preprocessing:
-                preprocess_result = self.preprocessor.full_pipeline(screenshot_path)
+                from copilot_agent.perception.preprocessing import PreprocessMode
+                preprocess_result = self.preprocessor.preprocess(
+                    screenshot_path,
+                    mode=PreprocessMode.FULL,
+                )
                 if preprocess_result.success:
                     processed_path = preprocess_result.output_path
                 else:
@@ -329,7 +340,7 @@ class PerceptionPipeline:
         start = time.time()
         
         # Take full screenshot first
-        screenshot_result = self.screenshot.capture()
+        screenshot_result = self.screenshot.capture_full_screen()
         if not screenshot_result.success:
             return CaptureResult(
                 success=False,
