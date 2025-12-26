@@ -1,0 +1,41 @@
+# Default configuration for Copilot-Gemini Agent
+# Copy to ~/.copilot-agent/config.yaml and customize
+
+gemini:
+  model: gemini-1.5-flash
+  max_retries: 3
+  timeout_seconds: 30
+  api_key_env: GEMINI_API_KEY
+
+perception:
+  ocr_attempts: 2
+  template_attempts: 2
+  vision_enabled: true
+  max_vision_per_iteration: 3
+  max_vision_per_session: 20
+  vision_cooldown_seconds: 5
+
+automation:
+  default_mode: approve  # approve | step | auto
+  max_iterations: 20
+  max_runtime_minutes: 30
+  action_delay_ms: 50
+  typing_delay_ms: 20
+  response_timeout_seconds: 120
+  response_stability_ms: 2000
+
+storage:
+  base_path: ~/.copilot-agent
+  max_total_mb: 500
+  max_screenshots_per_session: 100
+  retention_days: 7
+
+safety:
+  kill_switch_hotkey: ctrl+shift+k
+  pause_hotkey: ctrl+shift+p
+  allowed_window_patterns:
+    - "^Visual Studio Code$"
+    - "^Code -"
+    - ".+ - Visual Studio Code$"
+  max_actions_per_second: 10
+  require_focus_verification: true

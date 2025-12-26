@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "created_at": "2025-01-02T16:00:00Z",
+  "updated_at": "2025-01-02T16:00:00Z",
+  "dpi_scale": 1.0,
+  "screen_width": 1920,
+  "screen_height": 1080,
+  "points": {
+    "vscode_window": {
+      "name": "VS Code Window",
+      "x": 960,
+      "y": 540,
+      "description": "Center of VS Code main window"
+    },
+    "copilot_input": {
+      "name": "Copilot Input",
+      "x": 1650,
+      "y": 950,
+      "description": "Copilot chat input field"
+    },
+    "copilot_response_top": {
+      "name": "Copilot Response (Top-Left)",
+      "x": 1400,
+      "y": 200,
+      "description": "Top-left corner of Copilot response area"
+    },
+    "copilot_response_bottom": {
+      "name": "Copilot Response (Bottom-Right)",
+      "x": 1900,
+      "y": 900,
+      "description": "Bottom-right corner of Copilot response area"
+    }
+  },
+  "metadata": {
+    "os": "Windows",
+    "os_version": "10.0.19045",
+    "vscode_version": "1.95.0",
+    "notes": "Sample calibration for 1920x1080 at 100% DPI"
+  }
+}
