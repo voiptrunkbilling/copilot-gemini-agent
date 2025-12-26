@@ -20,6 +20,26 @@ class GeminiConfig(BaseModel):
     api_key_env: str = Field(default="GEMINI_API_KEY", description="Environment variable for API key")
 
 
+class ReviewerConfig(BaseModel):
+    """Reviewer loop configuration."""
+    
+    # Iteration control
+    max_iterations: int = Field(default=10, ge=1, le=50, description="Max review iterations")
+    timeout_per_review_seconds: int = Field(default=30, ge=5, le=120)
+    
+    # Stop conditions
+    stop_on_repeated_critiques: int = Field(default=3, ge=2, le=10, description="Stop after N identical critiques")
+    stop_on_low_confidence: bool = Field(default=False, description="Stop if reviewer has low confidence")
+    
+    # Safety mode
+    pause_before_send: bool = Field(default=True, description="Pause for user approval before sending feedback")
+    auto_accept_after: int = Field(default=0, ge=0, le=50, description="Auto-accept after N successful iterations (0=disabled)")
+    
+    # Response detection
+    response_wait_seconds: int = Field(default=30, ge=5, le=120, description="Wait for Copilot response")
+    response_stability_ms: int = Field(default=2000, ge=500, le=10000, description="Wait for response to stabilize")
+
+
 class PerceptionConfig(BaseModel):
     """Perception engine configuration."""
     
@@ -72,6 +92,7 @@ class AgentConfig(BaseModel):
     """Root configuration for Copilot-Gemini Agent."""
     
     gemini: GeminiConfig = Field(default_factory=GeminiConfig)
+    reviewer: ReviewerConfig = Field(default_factory=ReviewerConfig)
     perception: PerceptionConfig = Field(default_factory=PerceptionConfig)
     automation: AutomationConfig = Field(default_factory=AutomationConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
