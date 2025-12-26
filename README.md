@@ -33,6 +33,30 @@ venv\Scripts\activate  # Windows
 pip install -e .
 ```
 
+## Configuration
+
+Create a `config.yaml` file or use environment variables:
+
+```yaml
+# Reviewer settings
+reviewer:
+  max_iterations: 10        # Maximum review cycles (default: 10)
+  pause_before_send: true   # Pause for confirmation before API calls
+  stop_on_repeated_critiques: 3  # Stop after N identical critiques
+  response_wait_seconds: 30 # Timeout for Gemini responses
+
+# Actuator settings
+actuator:
+  typing_speed: 0.05       # Seconds between keystrokes
+  target_window_pattern: "Visual Studio Code"
+```
+
+### Environment Variables
+
+```bash
+export GEMINI_API_KEY="your-api-key"  # Required for live review
+```
+
 ## Usage
 
 ```bash
@@ -42,14 +66,58 @@ python -m copilot_agent run --task "Fix the type error in handleSubmit"
 # Run calibration
 python -m copilot_agent calibrate
 
-# Dry-run mode
+# Dry-run mode (no Gemini API calls)
 python -m copilot_agent run --task "..." --dry-run
+```
+
+### Demo Scripts
+
+Validate the reviewer integration:
+
+```bash
+# Run mock tests (no API key needed)
+python scripts/demo_reviewer.py --mock
+
+# Test live Gemini API (requires GEMINI_API_KEY)
+python scripts/demo_reviewer.py --api-test
+
+# Full demo with all tests
+python scripts/demo_reviewer.py
+```
+
+Expected output for `--mock`:
+```
+[PASS] Mock initialization
+[PASS] Mock review (good response)
+...
+✓ 10/10 tests passed
+```
+
+## Review Loop
+
+The agent runs an iterative review loop:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  1. Prompt → Copilot                                    │
+│  2. Wait for response                                   │
+│  3. Capture screenshot + OCR                            │
+│  4. Send to Gemini reviewer                             │
+│  5. Parse verdict:                                      │
+│     • ACCEPT → Done!                                    │
+│     • CRITIQUE → Feed back to Copilot, goto 1          │
+│     • CLARIFY → Request more info, goto 1              │
+│  6. Repeat until max_iterations or acceptance          │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ## Safety
 
 - **Kill switch:** `Ctrl+Shift+K` stops automation immediately
 - **Window allowlist:** Only interacts with VS Code windows
+- **Pause mode:** `pause_before_send: true` requires confirmation before API calls
+- **Iteration limits:** Hard cap on review cycles prevents runaway loops
+- **Secret redaction:** API keys are scrubbed from all logs
 
 ## License
 

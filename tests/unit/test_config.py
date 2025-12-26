@@ -9,6 +9,7 @@ from pathlib import Path
 from copilot_agent.config import (
     AgentConfig,
     GeminiConfig,
+    ReviewerConfig,
     PerceptionConfig,
     AutomationConfig,
     StorageConfig,
@@ -23,14 +24,49 @@ class TestGeminiConfig:
     
     def test_defaults(self):
         config = GeminiConfig()
-        assert config.model == "gemini-1.5-flash"
+        assert config.model == "gemini-2.5-flash"  # For vision
         assert config.max_retries == 3
         assert config.timeout_seconds == 30
     
     def test_custom_values(self):
-        config = GeminiConfig(model="gemini-1.5-pro", max_retries=5)
-        assert config.model == "gemini-1.5-pro"
+        config = GeminiConfig(model="gemini-2.5-pro", max_retries=5)
+        assert config.model == "gemini-2.5-pro"
         assert config.max_retries == 5
+
+
+class TestReviewerConfig:
+    """Tests for ReviewerConfig."""
+    
+    def test_defaults(self):
+        config = ReviewerConfig()
+        assert config.model == "gemma-3-27b-it"  # Primary reviewer model
+        assert config.fallback_model == "gemini-2.5-flash"
+        assert config.max_iterations == 10
+        assert config.timeout_per_review_seconds == 30
+        assert config.stop_on_repeated_critiques == 3
+        assert config.pause_before_send is True
+        # Quota guardrails
+        assert config.max_reviews_per_session == 50
+        assert config.backoff_multiplier == 2.0
+        assert config.pause_on_quota_exhausted is True
+    
+    def test_custom_values(self):
+        config = ReviewerConfig(
+            max_iterations=5,
+            pause_before_send=False,
+            stop_on_repeated_critiques=5,
+        )
+        assert config.max_iterations == 5
+        assert config.pause_before_send is False
+        assert config.stop_on_repeated_critiques == 5
+    
+    def test_auto_accept_disabled(self):
+        config = ReviewerConfig()
+        assert config.auto_accept_after == 0
+    
+    def test_auto_accept_enabled(self):
+        config = ReviewerConfig(auto_accept_after=5)
+        assert config.auto_accept_after == 5
 
 
 class TestPerceptionConfig:
@@ -86,8 +122,10 @@ class TestAgentConfig:
     
     def test_defaults(self):
         config = AgentConfig()
-        assert config.gemini.model == "gemini-1.5-flash"
+        assert config.gemini.model == "gemini-2.5-flash"  # Vision model
+        assert config.reviewer.model == "gemma-3-27b-it"  # Reviewer model
         assert config.automation.default_mode == "approve"
+        assert config.reviewer.pause_before_send is True
     
     def test_storage_path(self):
         config = AgentConfig()
@@ -96,6 +134,11 @@ class TestAgentConfig:
     def test_sessions_path(self):
         config = AgentConfig()
         assert config.sessions_path.name == "sessions"
+    
+    def test_reviewer_config_present(self):
+        config = AgentConfig()
+        assert hasattr(config, 'reviewer')
+        assert config.reviewer.max_iterations == 10
 
 
 class TestConfigIO:
@@ -109,6 +152,7 @@ class TestConfigIO:
             config = AgentConfig(
                 gemini=GeminiConfig(model="test-model"),
                 automation=AutomationConfig(max_iterations=10),
+                reviewer=ReviewerConfig(pause_before_send=False),
             )
             
             # Save
@@ -119,7 +163,10 @@ class TestConfigIO:
             loaded = load_config(str(config_path))
             assert loaded.gemini.model == "test-model"
             assert loaded.automation.max_iterations == 10
+            assert loaded.reviewer.pause_before_send is False
     
     def test_load_nonexistent_returns_defaults(self):
         config = load_config("/nonexistent/path/config.yaml")
-        assert config.gemini.model == "gemini-1.5-flash"
+        assert config.gemini.model == "gemini-2.5-flash"  # Vision model
+        assert config.reviewer.model == "gemma-3-27b-it"  # Reviewer model
+        assert config.reviewer.max_iterations == 10
