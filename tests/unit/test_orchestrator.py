@@ -33,6 +33,15 @@ class TestOrchestratorBudget:
         assert budget.max_ui_actions == 200
         assert budget.reviewer_calls == 0
     
+    def test_from_config(self):
+        """Test creating budget from config."""
+        from copilot_agent.config import AgentConfig
+        config = AgentConfig()
+        budget = OrchestratorBudget.from_config(config)
+        
+        assert budget.max_reviewer_calls == config.reviewer.max_reviews_per_session
+        assert budget.max_vision_calls == config.perception.max_vision_per_session
+    
     def test_check_and_use(self):
         """Test budget check and use."""
         budget = OrchestratorBudget(max_reviewer_calls=3)
@@ -45,15 +54,56 @@ class TestOrchestratorBudget:
         budget.use_reviewer()
         assert budget.check_reviewer() is False
     
+    def test_check_all(self):
+        """Test checking all budgets at once."""
+        budget = OrchestratorBudget(max_reviewer_calls=1)
+        budget.start()
+        
+        ok, exhausted = budget.check_all()
+        assert ok is True
+        assert exhausted is None
+        
+        budget.use_reviewer()
+        ok, exhausted = budget.check_all()
+        assert ok is False
+        assert exhausted == "reviewer_calls"
+    
+    def test_get_warnings(self):
+        """Test warning threshold detection."""
+        budget = OrchestratorBudget(max_reviewer_calls=10, warning_threshold=0.8)
+        
+        # No warning yet
+        assert len(budget.get_warnings()) == 0
+        
+        # Use 8 calls (80% threshold)
+        for _ in range(8):
+            budget.use_reviewer()
+        
+        warnings = budget.get_warnings()
+        assert len(warnings) == 1
+        assert warnings[0][0] == "reviewer_calls"
+    
     def test_get_usage_report(self):
         """Test usage report generation."""
         budget = OrchestratorBudget()
+        budget.start()
         budget.use_reviewer()
         budget.use_vision()
         
         report = budget.get_usage_report()
         assert "1/50" in report["reviewer"]
         assert "1/100" in report["vision"]
+        assert "runtime" in report
+    
+    def test_get_usage_percentage(self):
+        """Test usage percentage calculation."""
+        budget = OrchestratorBudget(max_reviewer_calls=100)
+        
+        for _ in range(50):
+            budget.use_reviewer()
+        
+        percentages = budget.get_usage_percentage()
+        assert percentages["reviewer"] == 50.0
 
 
 class TestIterationResult:

@@ -63,16 +63,39 @@ class IterationResult:
 
 @dataclass
 class OrchestratorBudget:
-    """Budget limits for orchestrator operations."""
+    """Budget limits for orchestrator operations.
+    
+    Enforces resource limits to prevent runaway sessions and quota exhaustion.
+    """
     
     max_reviewer_calls: int = 50
     max_vision_calls: int = 100
     max_ui_actions: int = 200
+    max_runtime_seconds: int = 1800  # 30 minutes
+    
+    # Warning thresholds (percentage)
+    warning_threshold: float = 0.8
     
     # Current usage
     reviewer_calls: int = 0
     vision_calls: int = 0
     ui_actions: int = 0
+    start_time: Optional[float] = None
+    
+    @classmethod
+    def from_config(cls, config: AgentConfig) -> "OrchestratorBudget":
+        """Create budget from config."""
+        return cls(
+            max_reviewer_calls=config.reviewer.max_reviews_per_session,
+            max_vision_calls=config.perception.max_vision_per_session,
+            max_ui_actions=config.automation.max_iterations * 20,  # ~20 actions per iteration
+            max_runtime_seconds=config.automation.max_runtime_minutes * 60,
+        )
+    
+    def start(self) -> None:
+        """Start budget tracking."""
+        import time
+        self.start_time = time.time()
     
     def check_reviewer(self) -> bool:
         """Check if reviewer budget is available."""
@@ -86,6 +109,41 @@ class OrchestratorBudget:
         """Check if UI action budget is available."""
         return self.ui_actions < self.max_ui_actions
     
+    def check_runtime(self) -> bool:
+        """Check if runtime budget is available."""
+        if self.start_time is None:
+            return True
+        import time
+        elapsed = time.time() - self.start_time
+        return elapsed < self.max_runtime_seconds
+    
+    def check_all(self) -> tuple[bool, Optional[str]]:
+        """Check all budgets and return (ok, exhausted_resource)."""
+        if not self.check_runtime():
+            return False, "runtime"
+        if not self.check_reviewer():
+            return False, "reviewer_calls"
+        if not self.check_vision():
+            return False, "vision_calls"
+        if not self.check_ui():
+            return False, "ui_actions"
+        return True, None
+    
+    def get_warnings(self) -> List[tuple[str, int, int]]:
+        """Get list of resources approaching limit: (name, used, max)."""
+        warnings = []
+        
+        if self.reviewer_calls >= self.max_reviewer_calls * self.warning_threshold:
+            warnings.append(("reviewer_calls", self.reviewer_calls, self.max_reviewer_calls))
+        
+        if self.vision_calls >= self.max_vision_calls * self.warning_threshold:
+            warnings.append(("vision_calls", self.vision_calls, self.max_vision_calls))
+        
+        if self.ui_actions >= self.max_ui_actions * self.warning_threshold:
+            warnings.append(("ui_actions", self.ui_actions, self.max_ui_actions))
+        
+        return warnings
+    
     def use_reviewer(self) -> None:
         """Consume one reviewer call."""
         self.reviewer_calls += 1
@@ -98,12 +156,31 @@ class OrchestratorBudget:
         """Consume one UI action."""
         self.ui_actions += 1
     
+    def get_elapsed_seconds(self) -> float:
+        """Get elapsed runtime in seconds."""
+        if self.start_time is None:
+            return 0.0
+        import time
+        return time.time() - self.start_time
+    
     def get_usage_report(self) -> dict[str, Any]:
         """Get usage report."""
+        elapsed = self.get_elapsed_seconds()
         return {
             "reviewer": f"{self.reviewer_calls}/{self.max_reviewer_calls}",
             "vision": f"{self.vision_calls}/{self.max_vision_calls}",
             "ui_actions": f"{self.ui_actions}/{self.max_ui_actions}",
+            "runtime": f"{int(elapsed)}/{self.max_runtime_seconds}s",
+        }
+    
+    def get_usage_percentage(self) -> dict[str, float]:
+        """Get usage as percentages."""
+        elapsed = self.get_elapsed_seconds()
+        return {
+            "reviewer": self.reviewer_calls / self.max_reviewer_calls * 100 if self.max_reviewer_calls else 0,
+            "vision": self.vision_calls / self.max_vision_calls * 100 if self.max_vision_calls else 0,
+            "ui_actions": self.ui_actions / self.max_ui_actions * 100 if self.max_ui_actions else 0,
+            "runtime": elapsed / self.max_runtime_seconds * 100 if self.max_runtime_seconds else 0,
         }
 
 
@@ -203,8 +280,8 @@ class Orchestrator:
         )
         self._parse_tracker = ParseFailureTracker(threshold=3)
         
-        # M5: Budget
-        self._budget = budget or OrchestratorBudget()
+        # M6: Budget from config
+        self._budget = budget or OrchestratorBudget.from_config(config)
         
         # Iteration control
         self._repeated_critiques: List[str] = []
@@ -218,6 +295,7 @@ class Orchestrator:
             max_iterations=config.reviewer.max_iterations,
             pause_before_send=config.reviewer.pause_before_send,
             checkpointing=checkpointer is not None,
+            budget_limits=self._budget.get_usage_report(),
         )
     
     @property
@@ -304,13 +382,16 @@ class Orchestrator:
         - Kill switch checks before each operation
         - Circuit breaker protection for external calls
         - Metrics emission throughout
-        - Budget enforcement
+        - Budget enforcement with warnings
         """
         session = self.state_manager.session
         if not session:
             raise RuntimeError("No active session")
         
         max_iterations = self.config.reviewer.max_iterations
+        
+        # M6: Start budget tracking
+        self._budget.start()
         
         # M5: Initialize metrics for this session
         self._metrics_collector.set_session(
@@ -332,6 +413,7 @@ class Orchestrator:
             session_id=session.session_id,
             task=session.task_description[:50],
             max_iterations=max_iterations,
+            budget=self._budget.get_usage_report(),
         )
         
         try:
@@ -357,11 +439,20 @@ class Orchestrator:
                     self.state_manager.transition_to(SessionPhase.COMPLETE)
                     break
                 
-                # M5: Check budget limits
-                if not self._check_budget():
-                    logger.warning("Budget exhausted, pausing")
-                    session.completion_reason = "budget_exhausted"
+                # M6: Enhanced budget check with warnings
+                budget_ok, exhausted = self._check_budget_enhanced()
+                if not budget_ok:
+                    logger.warning("Budget exhausted", resource=exhausted)
+                    self._session_metrics.budget_exhausted(
+                        exhausted or "unknown",
+                        getattr(self._budget, exhausted.replace("_calls", "_calls") if exhausted else "reviewer_calls", 0),
+                        getattr(self._budget, f"max_{exhausted}" if exhausted else "max_reviewer_calls", 0),
+                    )
+                    session.completion_reason = f"budget_exhausted_{exhausted}"
                     self.state_manager.transition_to(SessionPhase.PAUSED)
+                    
+                    if self._checkpointer:
+                        self._checkpointer.mark_paused(f"budget:{exhausted}")
                     break
                 
                 # Run one iteration
@@ -435,24 +526,35 @@ class Orchestrator:
             )
     
     def _check_budget(self) -> bool:
-        """Check if budget is available for next iteration."""
-        if not self._budget.check_reviewer():
-            self._session_metrics.budget_exhausted(
-                "reviewer",
-                self._budget.reviewer_calls,
-                self._budget.max_reviewer_calls,
-            )
-            return False
+        """Check if budget is available for next iteration (legacy)."""
+        ok, _ = self._check_budget_enhanced()
+        return ok
+    
+    def _check_budget_enhanced(self) -> tuple[bool, Optional[str]]:
+        """
+        Check all budgets and emit warnings.
         
-        # Warn at 80% usage
-        if self._budget.reviewer_calls >= self._budget.max_reviewer_calls * 0.8:
-            self._session_metrics.budget_warning(
-                "reviewer",
-                self._budget.reviewer_calls,
-                self._budget.max_reviewer_calls,
+        Returns:
+            (ok, exhausted_resource) tuple
+        """
+        # Check all budgets
+        ok, exhausted = self._budget.check_all()
+        
+        if not ok:
+            return False, exhausted
+        
+        # Emit warnings for resources approaching limit
+        for resource, used, limit in self._budget.get_warnings():
+            self._session_metrics.budget_warning(resource, used, limit)
+            logger.warning(
+                "Budget warning",
+                resource=resource,
+                used=used,
+                limit=limit,
+                percent=int(used / limit * 100),
             )
         
-        return True
+        return True, None
     
     async def _run_iteration(self) -> IterationResult:
         """
