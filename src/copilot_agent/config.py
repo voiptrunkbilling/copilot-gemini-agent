@@ -14,7 +14,7 @@ from pydantic_settings import BaseSettings
 class GeminiConfig(BaseModel):
     """Gemini API configuration."""
     
-    model: str = Field(default="gemini-1.5-flash", description="Gemini model ID")
+    model: str = Field(default="gemini-2.0-flash", description="Gemini model ID")
     max_retries: int = Field(default=3, ge=1, le=10)
     timeout_seconds: int = Field(default=30, ge=5, le=120)
     api_key_env: str = Field(default="GEMINI_API_KEY", description="Environment variable for API key")

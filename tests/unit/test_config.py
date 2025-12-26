@@ -24,13 +24,13 @@ class TestGeminiConfig:
     
     def test_defaults(self):
         config = GeminiConfig()
-        assert config.model == "gemini-1.5-flash"
+        assert config.model == "gemini-2.0-flash"
         assert config.max_retries == 3
         assert config.timeout_seconds == 30
     
     def test_custom_values(self):
-        config = GeminiConfig(model="gemini-1.5-pro", max_retries=5)
-        assert config.model == "gemini-1.5-pro"
+        config = GeminiConfig(model="gemini-2.5-pro", max_retries=5)
+        assert config.model == "gemini-2.5-pro"
         assert config.max_retries == 5
 
 
@@ -116,7 +116,7 @@ class TestAgentConfig:
     
     def test_defaults(self):
         config = AgentConfig()
-        assert config.gemini.model == "gemini-1.5-flash"
+        assert config.gemini.model == "gemini-2.0-flash"
         assert config.automation.default_mode == "approve"
         assert config.reviewer.pause_before_send is True
     
@@ -160,5 +160,5 @@ class TestConfigIO:
     
     def test_load_nonexistent_returns_defaults(self):
         config = load_config("/nonexistent/path/config.yaml")
-        assert config.gemini.model == "gemini-1.5-flash"
+        assert config.gemini.model == "gemini-2.0-flash"
         assert config.reviewer.max_iterations == 10

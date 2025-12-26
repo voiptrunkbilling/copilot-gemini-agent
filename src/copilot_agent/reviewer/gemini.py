@@ -147,7 +147,7 @@ class GeminiReviewer:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-1.5-flash",
+        model: str = "gemini-2.0-flash",
         timeout_seconds: int = 30,
         max_retries: int = 3,
     ):

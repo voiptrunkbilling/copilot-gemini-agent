@@ -78,7 +78,7 @@ Extract all text from this image:"""
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-1.5-flash",
+        model: str = "gemini-2.0-flash",
         max_calls_per_iteration: int = DEFAULT_MAX_PER_ITERATION,
         max_calls_per_session: int = DEFAULT_MAX_PER_SESSION,
         cooldown_seconds: int = DEFAULT_COOLDOWN_SECONDS,

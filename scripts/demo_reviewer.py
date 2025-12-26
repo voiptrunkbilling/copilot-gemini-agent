@@ -149,17 +149,17 @@ def test_reviewer_init() -> bool:
     try:
         # Default init
         reviewer = GeminiReviewer()
-        assert reviewer.model == "gemini-1.5-flash"
+        assert reviewer.model == "gemini-2.0-flash"
         assert reviewer.timeout_seconds == 30
         print_result("Default initialization", True)
         
         # Custom init
         reviewer = GeminiReviewer(
-            model="gemini-1.5-pro",
+            model="gemini-2.5-pro",
             timeout_seconds=60,
             max_retries=5,
         )
-        assert reviewer.model == "gemini-1.5-pro"
+        assert reviewer.model == "gemini-2.5-pro"
         assert reviewer.max_retries == 5
         print_result("Custom initialization", True)
         

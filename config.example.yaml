@@ -2,7 +2,7 @@
 # Copy to ~/.copilot-agent/config.yaml and customize
 
 gemini:
-  model: gemini-1.5-flash
+  model: gemini-2.0-flash
   max_retries: 3
   timeout_seconds: 30
   api_key_env: GEMINI_API_KEY
