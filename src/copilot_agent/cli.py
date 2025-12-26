@@ -15,7 +15,10 @@ from rich.panel import Panel
 from rich.text import Text
 
 from copilot_agent import __version__
-from copilot_agent.config import load_config, AgentConfig
+from copilot_agent.config import (
+    load_config, save_config, AgentConfig, get_default_config_path,
+    SecretsManager, ConfigurationError,
+)
 from copilot_agent.state import StateManager, SessionPhase
 from copilot_agent.tui import AgentTUI
 from copilot_agent.safety.killswitch import KillSwitch
@@ -592,6 +595,136 @@ def _handle_kill_switch(state_manager: StateManager) -> None:
     logger.warning("Kill switch triggered!")
     state_manager.transition_to(SessionPhase.ABORTED)
     state_manager.checkpoint()
+
+
+@main.command("config")
+@click.option("--validate", "-v", is_flag=True, help="Validate configuration")
+@click.option("--show", "-s", is_flag=True, help="Show current configuration")
+@click.option("--secrets", is_flag=True, help="Show secrets status")
+@click.option("--init", "do_init", is_flag=True, help="Create default config file")
+@click.option("--path", "-p", type=click.Path(), help="Path to config file")
+def config_cmd(validate: bool, show: bool, secrets: bool, do_init: bool, path: Optional[str]) -> None:
+    """Manage configuration and secrets."""
+    
+    config_path = Path(path) if path else get_default_config_path()
+    
+    if do_init:
+        # Create default config
+        if config_path.exists():
+            if not click.confirm(f"Config file already exists at {config_path}. Overwrite?"):
+                console.print("Cancelled.")
+                return
+        
+        default_config = AgentConfig()
+        save_config(default_config, str(config_path))
+        console.print(f"[green]✓ Config file created: {config_path}[/green]")
+        console.print("\nEdit this file to customize settings.")
+        return
+    
+    if secrets:
+        # Show secrets status
+        console.print("\n[bold]Secrets Status[/bold]\n")
+        status = SecretsManager.get_status()
+        
+        table = Table(show_header=False)
+        table.add_column("Secret", style="cyan")
+        table.add_column("Status")
+        
+        for key, value in status.items():
+            if "NOT SET" in value:
+                style = "red"
+            elif "not set" in value:
+                style = "yellow"
+            else:
+                style = "green"
+            table.add_row(key, f"[{style}]{value}[/{style}]")
+        
+        console.print(table)
+        console.print("\n[dim]Secrets must be set via environment variables or .env file[/dim]")
+        return
+    
+    # Load config
+    try:
+        agent_config = load_config(str(config_path) if config_path.exists() else None)
+    except ConfigurationError as e:
+        console.print(f"[red]Configuration Error:[/red]")
+        console.print(e.message)
+        if e.suggestions:
+            console.print("\n[yellow]Suggestions:[/yellow]")
+            for s in e.suggestions:
+                console.print(f"  • {s}")
+        return
+    
+    if validate:
+        # Validate for run
+        console.print("\n[bold]Configuration Validation[/bold]\n")
+        
+        # Check if config file exists
+        if config_path.exists():
+            console.print(f"[green]✓ Config file:[/green] {config_path}")
+        else:
+            console.print(f"[yellow]⚠ Config file:[/yellow] Using defaults (no config file)")
+        
+        # Check secrets
+        valid, missing = SecretsManager.validate_all_required()
+        if valid:
+            console.print("[green]✓ Required secrets:[/green] All set")
+        else:
+            for key in missing:
+                console.print(f"[red]✗ Missing secret:[/red] {key}")
+        
+        # Validate config for run
+        warnings = agent_config.validate_for_run()
+        
+        if warnings:
+            console.print("\n[yellow]Warnings:[/yellow]")
+            for w in warnings:
+                console.print(f"  ⚠ {w}")
+        else:
+            console.print("[green]✓ Ready for run[/green]")
+        
+        console.print()
+        return
+    
+    if show or (not validate and not secrets and not do_init):
+        # Show current config
+        console.print("\n[bold]Current Configuration[/bold]\n")
+        console.print(f"Config file: {config_path}")
+        console.print(f"Exists: {'Yes' if config_path.exists() else 'No (using defaults)'}")
+        console.print()
+        
+        # Show key settings
+        sections = [
+            ("Gemini", [
+                ("Model", agent_config.gemini.model),
+                ("Max Retries", agent_config.gemini.max_retries),
+            ]),
+            ("Reviewer", [
+                ("Model", agent_config.reviewer.model),
+                ("Max Iterations", agent_config.reviewer.max_iterations),
+                ("Max Reviews/Session", agent_config.reviewer.max_reviews_per_session),
+            ]),
+            ("Automation", [
+                ("Default Mode", agent_config.automation.default_mode),
+                ("Max Iterations", agent_config.automation.max_iterations),
+                ("Max Runtime (min)", agent_config.automation.max_runtime_minutes),
+            ]),
+            ("Safety", [
+                ("Kill Switch", agent_config.safety.kill_switch_hotkey),
+                ("Pause Hotkey", agent_config.safety.pause_hotkey),
+            ]),
+            ("Storage", [
+                ("Path", agent_config.storage.base_path),
+                ("Max Size (MB)", agent_config.storage.max_total_mb),
+                ("Retention (days)", agent_config.storage.retention_days),
+            ]),
+        ]
+        
+        for section_name, fields in sections:
+            console.print(f"[cyan]{section_name}:[/cyan]")
+            for field_name, value in fields:
+                console.print(f"  {field_name}: {value}")
+            console.print()
 
 
 if __name__ == "__main__":
