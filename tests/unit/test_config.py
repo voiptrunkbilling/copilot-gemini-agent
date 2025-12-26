@@ -24,7 +24,7 @@ class TestGeminiConfig:
     
     def test_defaults(self):
         config = GeminiConfig()
-        assert config.model == "gemini-2.0-flash"
+        assert config.model == "gemini-2.5-flash"  # For vision
         assert config.max_retries == 3
         assert config.timeout_seconds == 30
     
@@ -39,10 +39,16 @@ class TestReviewerConfig:
     
     def test_defaults(self):
         config = ReviewerConfig()
+        assert config.model == "gemma-3-27b-it"  # Primary reviewer model
+        assert config.fallback_model == "gemini-2.5-flash"
         assert config.max_iterations == 10
         assert config.timeout_per_review_seconds == 30
         assert config.stop_on_repeated_critiques == 3
         assert config.pause_before_send is True
+        # Quota guardrails
+        assert config.max_reviews_per_session == 50
+        assert config.backoff_multiplier == 2.0
+        assert config.pause_on_quota_exhausted is True
     
     def test_custom_values(self):
         config = ReviewerConfig(
@@ -116,7 +122,8 @@ class TestAgentConfig:
     
     def test_defaults(self):
         config = AgentConfig()
-        assert config.gemini.model == "gemini-2.0-flash"
+        assert config.gemini.model == "gemini-2.5-flash"  # Vision model
+        assert config.reviewer.model == "gemma-3-27b-it"  # Reviewer model
         assert config.automation.default_mode == "approve"
         assert config.reviewer.pause_before_send is True
     
@@ -160,5 +167,6 @@ class TestConfigIO:
     
     def test_load_nonexistent_returns_defaults(self):
         config = load_config("/nonexistent/path/config.yaml")
-        assert config.gemini.model == "gemini-2.0-flash"
+        assert config.gemini.model == "gemini-2.5-flash"  # Vision model
+        assert config.reviewer.model == "gemma-3-27b-it"  # Reviewer model
         assert config.reviewer.max_iterations == 10

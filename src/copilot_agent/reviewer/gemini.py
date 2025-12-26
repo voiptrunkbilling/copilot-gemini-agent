@@ -147,25 +147,33 @@ class GeminiReviewer:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-2.0-flash",
+        model: str = "gemma-3-27b-it",
         timeout_seconds: int = 30,
         max_retries: int = 3,
+        max_reviews_per_session: int = 50,
+        backoff_multiplier: float = 2.0,
     ):
         """
         Initialize the Gemini reviewer.
         
         Args:
             api_key: Gemini API key (defaults to GEMINI_API_KEY env var)
-            model: Model ID to use
+            model: Model ID to use (default: gemma-3-27b-it for higher quota)
             timeout_seconds: Request timeout
             max_retries: Max retries on failure
+            max_reviews_per_session: Budget cap for API calls per session
+            backoff_multiplier: Exponential backoff multiplier on rate limits
         """
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
         self.model = model
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
+        self.max_reviews_per_session = max_reviews_per_session
+        self.backoff_multiplier = backoff_multiplier
         self._configured = False
         self._genai_model = None
+        self._quota_exhausted = False
+        self._current_backoff = 1.0  # Initial backoff in seconds
         
         # Statistics
         self._review_count = 0
@@ -173,6 +181,7 @@ class GeminiReviewer:
         self._critique_count = 0
         self._clarify_count = 0
         self._error_count = 0
+        self._rate_limit_count = 0
         
         logger.info(
             "GeminiReviewer initialized",
@@ -185,6 +194,33 @@ class GeminiReviewer:
     def available(self) -> bool:
         """Check if reviewer is available."""
         return HAS_GENAI and bool(self.api_key)
+    
+    @property
+    def quota_exhausted(self) -> bool:
+        """Check if quota has been exhausted."""
+        return self._quota_exhausted
+    
+    @property
+    def budget_remaining(self) -> int:
+        """Get remaining review budget for this session."""
+        return max(0, self.max_reviews_per_session - self._review_count)
+    
+    @property
+    def rate_limit_count(self) -> int:
+        """Get count of rate limit errors encountered."""
+        return self._rate_limit_count
+    
+    def reset_session(self) -> None:
+        """Reset session counters (for new session)."""
+        self._review_count = 0
+        self._quota_exhausted = False
+        self._current_backoff = 1.0
+        self._rate_limit_count = 0
+        logger.info("Reviewer session reset")
+    
+    def _is_gemma_model(self) -> bool:
+        """Check if using a Gemma model (doesn't support system instructions)."""
+        return "gemma" in self.model.lower()
     
     def _ensure_configured(self) -> bool:
         """Ensure Gemini is configured."""
@@ -201,17 +237,31 @@ class GeminiReviewer:
         
         try:
             genai.configure(api_key=self.api_key)
-            self._genai_model = genai.GenerativeModel(
-                self.model,
-                system_instruction=SYSTEM_PROMPT,
-                generation_config=genai.GenerationConfig(
-                    temperature=0.1,  # Low temperature for consistent JSON
-                    top_p=0.95,
-                    max_output_tokens=1024,
-                ),
-            )
+            
+            # Gemma models don't support system_instruction
+            if self._is_gemma_model():
+                self._genai_model = genai.GenerativeModel(
+                    self.model,
+                    generation_config=genai.GenerationConfig(
+                        temperature=0.1,  # Low temperature for consistent JSON
+                        top_p=0.95,
+                        max_output_tokens=1024,
+                    ),
+                )
+                logger.info("Gemini configured (Gemma mode, no system instruction)", model=self.model)
+            else:
+                self._genai_model = genai.GenerativeModel(
+                    self.model,
+                    system_instruction=SYSTEM_PROMPT,
+                    generation_config=genai.GenerationConfig(
+                        temperature=0.1,  # Low temperature for consistent JSON
+                        top_p=0.95,
+                        max_output_tokens=1024,
+                    ),
+                )
+                logger.info("Gemini configured", model=self.model)
+            
             self._configured = True
-            logger.info("Gemini configured", model=self.model)
             return True
         except Exception as e:
             logger.error("Failed to configure Gemini", error=str(e))
@@ -239,6 +289,33 @@ class GeminiReviewer:
             ReviewResult with verdict and feedback
         """
         start = time.time()
+        
+        # Check quota budget
+        if self._review_count >= self.max_reviews_per_session:
+            logger.warning(
+                "Session review budget exhausted",
+                count=self._review_count,
+                max=self.max_reviews_per_session,
+            )
+            self._quota_exhausted = True
+            return ReviewResult(
+                verdict=ReviewVerdict.ERROR,
+                confidence="low",
+                reasoning=f"Session budget exhausted ({self._review_count}/{self.max_reviews_per_session} reviews)",
+                issues=["Budget exceeded"],
+                raw_response="",
+            )
+        
+        # Check if quota was previously exhausted
+        if self._quota_exhausted:
+            return ReviewResult(
+                verdict=ReviewVerdict.ERROR,
+                confidence="low",
+                reasoning="API quota exhausted - please wait or use different API key",
+                issues=["Quota exhausted"],
+                raw_response="",
+            )
+        
         self._review_count += 1
         
         if not self._ensure_configured():
@@ -260,10 +337,19 @@ class GeminiReviewer:
             history_summary=history_summary,
         )
         
-        # Call Gemini API with retries
+        # For Gemma models, prepend system prompt (they don't support system_instruction)
+        if self._is_gemma_model():
+            prompt = f"{SYSTEM_PROMPT}\n\n---\n\n{prompt}"
+        
+        # Call Gemini API with retries and exponential backoff
         last_error = None
         for attempt in range(self.max_retries):
             try:
+                # Apply backoff delay if we've had rate limits
+                if self._current_backoff > 1.0:
+                    logger.info(f"Applying backoff delay: {self._current_backoff:.1f}s")
+                    await asyncio.sleep(self._current_backoff)
+                
                 # Run in executor to avoid blocking
                 loop = asyncio.get_event_loop()
                 response = await asyncio.wait_for(
@@ -276,6 +362,9 @@ class GeminiReviewer:
                 
                 raw_text = response.text
                 duration_ms = int((time.time() - start) * 1000)
+                
+                # Reset backoff on success
+                self._current_backoff = 1.0
                 
                 # Parse response
                 result = self.parse_response(raw_text)
@@ -304,11 +393,31 @@ class GeminiReviewer:
                 logger.warning(f"Review timeout, attempt {attempt + 1}/{self.max_retries}")
             except Exception as e:
                 last_error = str(e)
-                logger.warning(f"Review failed, attempt {attempt + 1}/{self.max_retries}", error=last_error)
+                is_rate_limit = "429" in last_error or "quota" in last_error.lower()
+                
+                if is_rate_limit:
+                    self._rate_limit_count += 1
+                    # Exponential backoff on rate limits
+                    self._current_backoff = min(
+                        self._current_backoff * self.backoff_multiplier,
+                        60.0  # Max 60 second backoff
+                    )
+                    logger.warning(
+                        f"Rate limit hit, attempt {attempt + 1}/{self.max_retries}",
+                        error=last_error,
+                        next_backoff=self._current_backoff,
+                    )
+                    
+                    # If we've hit too many rate limits, mark quota exhausted
+                    if self._rate_limit_count >= 5:
+                        self._quota_exhausted = True
+                        logger.error("Too many rate limits, marking quota exhausted")
+                else:
+                    logger.warning(f"Review failed, attempt {attempt + 1}/{self.max_retries}", error=last_error)
             
-            # Brief delay before retry
+            # Brief delay before retry (or use backoff for rate limits)
             if attempt < self.max_retries - 1:
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(self._current_backoff)
         
         # All retries failed
         self._error_count += 1
@@ -365,6 +474,10 @@ class GeminiReviewer:
             max_iterations=max_iterations,
             history_summary=history_summary,
         )
+        
+        # For Gemma models, prepend system prompt (they don't support system_instruction)
+        if self._is_gemma_model():
+            prompt = f"{SYSTEM_PROMPT}\n\n---\n\n{prompt}"
         
         # Call Gemini API with retries
         last_error = None

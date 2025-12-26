@@ -74,7 +74,7 @@ class TestReviewResult:
             issues=["Issue 1"],
             follow_up_prompt="Fix it",
             duration_ms=500,
-            model_used="gemini-2.0-flash",
+            model_used="gemma-3-27b-it",
             tokens_used=100,
         )
         
@@ -86,7 +86,7 @@ class TestReviewResult:
         assert data["issues"] == ["Issue 1"]
         assert data["follow_up_prompt"] == "Fix it"
         assert data["duration_ms"] == 500
-        assert data["model_used"] == "gemini-2.0-flash"
+        assert data["model_used"] == "gemma-3-27b-it"
 
 
 class TestBuildReviewPrompt:
@@ -177,7 +177,7 @@ class TestGeminiReviewer:
         """Test default initialization."""
         reviewer = GeminiReviewer()
         
-        assert reviewer.model == "gemini-2.0-flash"
+        assert reviewer.model == "gemma-3-27b-it"
         assert reviewer.timeout_seconds == 30
         assert reviewer.max_retries == 3
     

@@ -1,11 +1,27 @@
 # Default configuration for Copilot-Gemini Agent
 # Copy to ~/.copilot-agent/config.yaml and customize
 
+# Gemini API settings (used for vision/perception)
 gemini:
-  model: gemini-2.0-flash
+  model: gemini-2.5-flash  # Fast model for vision fallback
   max_retries: 3
   timeout_seconds: 30
   api_key_env: GEMINI_API_KEY
+
+# Reviewer settings (Gemini-based code reviewer)
+reviewer:
+  model: gemma-3-27b-it      # Primary model (higher quota, strong reasoning)
+  fallback_model: gemini-2.5-flash  # Fallback if primary unavailable
+  max_iterations: 10
+  timeout_per_review_seconds: 30
+  stop_on_repeated_critiques: 3
+  pause_before_send: true    # Pause for user approval before API calls
+  # Quota guardrails
+  max_reviews_per_session: 50
+  backoff_multiplier: 2.0    # Exponential backoff on 429 errors
+  initial_backoff_seconds: 1.0
+  max_backoff_seconds: 60.0
+  pause_on_quota_exhausted: true
 
 perception:
   ocr_attempts: 2
