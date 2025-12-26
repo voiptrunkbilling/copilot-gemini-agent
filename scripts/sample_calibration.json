@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": "1.0",
   "created_at": "2025-01-02T16:00:00Z",
   "updated_at": "2025-01-02T16:00:00Z",
   "dpi_scale": 1.0,
@@ -7,31 +7,47 @@
   "screen_height": 1080,
   "points": {
     "vscode_window": {
-      "name": "VS Code Window",
+      "name": "vscode_window",
+      "description": "VS Code window (click title bar)",
       "x": 960,
       "y": 540,
-      "description": "Center of VS Code main window"
+      "width": null,
+      "height": null,
+      "calibrated": true,
+      "timestamp": "2025-01-02T16:00:00Z"
     },
     "copilot_input": {
-      "name": "Copilot Input",
+      "name": "copilot_input",
+      "description": "Copilot Chat input box",
       "x": 1650,
       "y": 950,
-      "description": "Copilot chat input field"
+      "width": null,
+      "height": null,
+      "calibrated": true,
+      "timestamp": "2025-01-02T16:00:00Z"
     },
-    "copilot_response_top": {
-      "name": "Copilot Response (Top-Left)",
+    "copilot_response": {
+      "name": "copilot_response",
+      "description": "Copilot response area (top-left corner)",
       "x": 1400,
       "y": 200,
-      "description": "Top-left corner of Copilot response area"
+      "width": 500,
+      "height": 700,
+      "calibrated": true,
+      "timestamp": "2025-01-02T16:00:00Z"
     },
-    "copilot_response_bottom": {
-      "name": "Copilot Response (Bottom-Right)",
+    "copilot_response_end": {
+      "name": "copilot_response_end",
+      "description": "Copilot response area (bottom-right corner)",
       "x": 1900,
       "y": 900,
-      "description": "Bottom-right corner of Copilot response area"
+      "width": null,
+      "height": null,
+      "calibrated": true,
+      "timestamp": "2025-01-02T16:00:00Z"
     }
   },
-  "metadata": {
+  "_metadata": {
     "os": "Windows",
     "os_version": "10.0.19045",
     "vscode_version": "1.95.0",

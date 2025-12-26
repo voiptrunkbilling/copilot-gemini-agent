@@ -105,7 +105,7 @@ def run(
     # Initialize action pipeline
     pipeline = ActionPipeline(
         dry_run=dry_run,
-        kill_switch_check=kill_switch.is_triggered,
+        kill_switch_check=lambda: kill_switch.triggered,
     )
     
     # Initialize TUI

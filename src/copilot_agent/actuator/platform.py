@@ -156,7 +156,7 @@ def get_screen_info() -> list[ScreenInfo]:
                 None, None, MONITORENUMPROC(callback), 0
             )
             
-            for i, (hMonitor, rect) in enumerate(monitors):
+            for i, (hMonitor, _) in enumerate(monitors):
                 # Get monitor info
                 class MONITORINFO(ctypes.Structure):
                     _fields_ = [
@@ -171,6 +171,7 @@ def get_screen_info() -> list[ScreenInfo]:
                 ctypes.windll.user32.GetMonitorInfoW(hMonitor, ctypes.byref(mi))
                 
                 is_primary = bool(mi.dwFlags & 1)  # MONITORINFOF_PRIMARY
+                rect = mi.rcMonitor  # Use the proper MONITORINFO rect
                 
                 # Get DPI for this monitor
                 try:
