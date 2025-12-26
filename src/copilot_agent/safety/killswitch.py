@@ -1,10 +1,17 @@
 """
 Kill switch implementation using pynput for global hotkeys.
+
+Enhanced with:
+- Preemptive check support for blocking operations
+- Interrupt callbacks for cancelling async operations
+- Thread-safe trigger with guaranteed callback execution
 """
 
 import threading
-from typing import Callable, Optional, Set, Any, TYPE_CHECKING
+import asyncio
+from typing import Callable, Optional, Set, Any, List, TYPE_CHECKING
 from dataclasses import dataclass
+from contextlib import contextmanager
 import time
 
 from copilot_agent.logging import get_logger
@@ -21,6 +28,11 @@ except ImportError:
 
 # Type alias for key events when pynput may not be available
 KeyType = Any  # Will be keyboard.Key | keyboard.KeyCode when pynput is available
+
+
+class KillSwitchTriggered(Exception):
+    """Exception raised when kill switch is triggered during blocking operation."""
+    pass
 
 
 @dataclass
@@ -48,6 +60,11 @@ class KillSwitch:
     Runs in a separate thread and monitors for:
     - Configured hotkey (default: Ctrl+Shift+K)
     - Rapid Escape key presses (3x within 1 second)
+    
+    Enhanced features:
+    - check() method for preemptive checks in loops
+    - Interrupt callbacks for async operation cancellation
+    - Context manager for protecting blocking operations
     """
     
     def __init__(
@@ -61,6 +78,10 @@ class KillSwitch:
         self._triggered = threading.Event()
         self._listener: Optional[keyboard.Listener] = None  # type: ignore
         self._thread: Optional[threading.Thread] = None
+        self._lock = threading.RLock()
+        
+        # Interrupt callbacks for cancelling operations
+        self._interrupt_callbacks: List[Callable[[], None]] = []
         
         # Track pressed modifiers
         self._pressed_modifiers: Set[str] = set()
@@ -69,6 +90,10 @@ class KillSwitch:
         self._escape_times: list[float] = []
         self._escape_threshold = 3  # Number of presses
         self._escape_window = 1.0  # Time window in seconds
+        
+        # Trigger metadata
+        self._trigger_time: Optional[float] = None
+        self._trigger_source: Optional[str] = None
         
         logger.info(
             "Kill switch initialized",
@@ -81,6 +106,81 @@ class KillSwitch:
     def triggered(self) -> bool:
         """Check if kill switch has been triggered."""
         return self._triggered.is_set()
+    
+    @property
+    def trigger_time(self) -> Optional[float]:
+        """Get time when kill switch was triggered."""
+        return self._trigger_time
+    
+    @property
+    def trigger_source(self) -> Optional[str]:
+        """Get source that triggered the kill switch."""
+        return self._trigger_source
+    
+    def check(self) -> None:
+        """
+        Check if kill switch is triggered and raise if so.
+        
+        Call this at the start of loops and before long operations.
+        
+        Raises:
+            KillSwitchTriggered: If kill switch has been triggered
+        """
+        if self._triggered.is_set():
+            raise KillSwitchTriggered(
+                f"Kill switch triggered by {self._trigger_source or 'unknown'}"
+            )
+    
+    def register_interrupt(self, callback: Callable[[], None]) -> None:
+        """
+        Register a callback to be called when kill switch triggers.
+        
+        Use for cancelling async operations, closing connections, etc.
+        
+        Args:
+            callback: Function to call on trigger
+        """
+        with self._lock:
+            self._interrupt_callbacks.append(callback)
+    
+    def unregister_interrupt(self, callback: Callable[[], None]) -> None:
+        """
+        Unregister an interrupt callback.
+        
+        Args:
+            callback: Previously registered callback
+        """
+        with self._lock:
+            try:
+                self._interrupt_callbacks.remove(callback)
+            except ValueError:
+                pass
+    
+    @contextmanager
+    def interruptible(self, cleanup: Optional[Callable[[], None]] = None):
+        """
+        Context manager for interruptible operations.
+        
+        Usage:
+            with kill_switch.interruptible(cancel_request):
+                response = await long_api_call()
+        
+        Args:
+            cleanup: Optional cleanup function to call on interrupt
+            
+        Raises:
+            KillSwitchTriggered: If kill switch triggers during operation
+        """
+        if cleanup:
+            self.register_interrupt(cleanup)
+        
+        try:
+            self.check()  # Check before starting
+            yield
+            self.check()  # Check after completing
+        finally:
+            if cleanup:
+                self.unregister_interrupt(cleanup)
     
     def start(self) -> None:
         """Start the kill switch listener."""
@@ -108,23 +208,55 @@ class KillSwitch:
     
     def trigger(self) -> None:
         """Manually trigger the kill switch."""
-        if self._triggered.is_set():
-            return
+        self._do_trigger("manual")
+    
+    def _do_trigger(self, source: str) -> None:
+        """
+        Internal trigger with source tracking.
         
-        logger.warning("Kill switch TRIGGERED!")
-        self._triggered.set()
-        
-        if self.on_trigger:
-            try:
-                self.on_trigger()
-            except Exception as e:
-                logger.error("Error in kill switch callback", error=str(e))
+        Args:
+            source: What triggered the kill switch
+        """
+        with self._lock:
+            if self._triggered.is_set():
+                return
+            
+            self._trigger_time = time.time()
+            self._trigger_source = source
+            
+            logger.warning(
+                "Kill switch TRIGGERED!",
+                source=source,
+            )
+            
+            self._triggered.set()
+            
+            # Call interrupt callbacks
+            for callback in self._interrupt_callbacks:
+                try:
+                    callback()
+                except Exception as e:
+                    logger.error(
+                        "Error in interrupt callback",
+                        error=str(e),
+                    )
+            
+            # Call main trigger callback
+            if self.on_trigger:
+                try:
+                    self.on_trigger()
+                except Exception as e:
+                    logger.error("Error in kill switch callback", error=str(e))
     
     def reset(self) -> None:
         """Reset the kill switch (for testing)."""
-        self._triggered.clear()
-        self._pressed_modifiers.clear()
-        self._escape_times.clear()
+        with self._lock:
+            self._triggered.clear()
+            self._pressed_modifiers.clear()
+            self._escape_times.clear()
+            self._trigger_time = None
+            self._trigger_source = None
+            self._interrupt_callbacks.clear()
     
     def _on_press(self, key: KeyType) -> None:
         """Handle key press event."""
@@ -139,7 +271,7 @@ class KillSwitch:
         
         # Check for configured hotkey
         if self._check_hotkey(key_name):
-            self.trigger()
+            self._do_trigger(f"hotkey:{self.hotkey_config.modifiers}+{self.hotkey_config.key}")
             return
         
         # Check for rapid Escape
@@ -206,7 +338,57 @@ class KillSwitch:
         # Check if threshold reached
         if len(self._escape_times) >= self._escape_threshold:
             logger.warning("Rapid Escape sequence detected!")
-            self.trigger()
+            self._do_trigger("rapid_escape")
+
+
+def wait_with_killswitch(
+    kill_switch: KillSwitch,
+    duration: float,
+    check_interval: float = 0.1,
+) -> None:
+    """
+    Wait for duration while checking kill switch.
+    
+    Use instead of time.sleep() for interruptible waits.
+    
+    Args:
+        kill_switch: Kill switch instance
+        duration: Total wait time in seconds
+        check_interval: How often to check kill switch
+        
+    Raises:
+        KillSwitchTriggered: If kill switch is triggered during wait
+    """
+    end_time = time.time() + duration
+    while time.time() < end_time:
+        kill_switch.check()
+        remaining = end_time - time.time()
+        time.sleep(min(check_interval, max(0, remaining)))
+
+
+async def async_wait_with_killswitch(
+    kill_switch: KillSwitch,
+    duration: float,
+    check_interval: float = 0.1,
+) -> None:
+    """
+    Async wait for duration while checking kill switch.
+    
+    Use instead of asyncio.sleep() for interruptible waits.
+    
+    Args:
+        kill_switch: Kill switch instance
+        duration: Total wait time in seconds
+        check_interval: How often to check kill switch
+        
+    Raises:
+        KillSwitchTriggered: If kill switch is triggered during wait
+    """
+    end_time = time.time() + duration
+    while time.time() < end_time:
+        kill_switch.check()
+        remaining = end_time - time.time()
+        await asyncio.sleep(min(check_interval, max(0, remaining)))
 
 
 class MockKillSwitch(KillSwitch):
