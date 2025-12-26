@@ -1,0 +1,29 @@
+# requirements.txt - Copilot-Gemini Agent v1
+# Python 3.10+ required
+
+# Core automation (M2)
+pyautogui>=0.9.54
+pynput>=1.7.6
+mss>=9.0.1
+pywin32>=306;sys_platform=="win32"
+pyperclip>=1.8.2  # Clipboard fallback
+
+# Perception (M3)
+pytesseract>=0.3.10
+Pillow>=10.0.0
+opencv-python>=4.8.0
+
+# API & networking
+httpx>=0.25.0
+
+# Config & validation
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+PyYAML>=6.0.1
+
+# CLI & TUI
+rich>=13.7.0
+click>=8.1.7
+
+# Logging
+structlog>=23.2.0

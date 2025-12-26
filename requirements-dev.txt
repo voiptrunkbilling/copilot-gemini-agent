@@ -1,0 +1,14 @@
+# requirements-dev.txt - Development dependencies
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.23.0
+pytest-cov>=4.1.0
+
+# Linting & formatting
+ruff>=0.1.0
+mypy>=1.7.0
+
+# Type stubs
+types-PyYAML>=6.0.0
+types-Pillow>=10.0.0
