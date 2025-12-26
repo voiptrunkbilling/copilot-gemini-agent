@@ -12,6 +12,10 @@ pyperclip>=1.8.2  # Clipboard fallback
 pytesseract>=0.3.10
 Pillow>=10.0.0
 opencv-python>=4.8.0
+numpy>=1.24.0
+
+# Gemini API (M3/M4)
+google-generativeai>=0.3.0
 
 # API & networking
 httpx>=0.25.0
