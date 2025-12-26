@@ -165,8 +165,20 @@ class TestConfigIO:
             assert loaded.automation.max_iterations == 10
             assert loaded.reviewer.pause_before_send is False
     
-    def test_load_nonexistent_returns_defaults(self):
-        config = load_config("/nonexistent/path/config.yaml")
+    def test_load_nonexistent_path_raises_error(self):
+        """When a specific config path is given but doesn't exist, raise error."""
+        from copilot_agent.config import ConfigurationError
+        
+        with pytest.raises(ConfigurationError) as exc_info:
+            load_config("/nonexistent/path/config.yaml")
+        
+        assert "not found" in str(exc_info.value)
+    
+    def test_load_default_returns_defaults(self):
+        """When no config path is given, return defaults (even if no file exists)."""
+        # This tests that load_config(None) returns defaults
+        # when the default config file doesn't exist
+        config = load_config(None)
         assert config.gemini.model == "gemini-2.5-flash"  # Vision model
         assert config.reviewer.model == "gemma-3-27b-it"  # Reviewer model
         assert config.reviewer.max_iterations == 10
